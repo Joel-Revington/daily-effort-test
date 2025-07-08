@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -30,34 +30,9 @@ import {
 import TaskAssignmentDialog from './TaskAssignmentDialog';
 import TaskDetailsDialog from './TaskDetailsDialog';
 import TaskEditDialog from './TaskEditDialog';
-import { addTaskToReport, completeTaskInReport } from '@/utils/taskDailyReportIntegration';
 import TaskGanttChart from './TaskGanttChart';
-
-interface Task {
-  id: number;
-  title: string;
-  description: string;
-  assignee: string;
-  assignedBy: string;
-  priority: 'high' | 'medium' | 'low';
-  status: 'pending' | 'in-progress' | 'completed' | 'escalated';
-  type: 'billable' | 'non-billable';
-  category: 'demo' | 'prePostPresentation' | 'corporateConsultingTraining' | 'project' | 'consultingContentPrep' | 'techSupport' | 'meeting' | 'devLearning' | 'misc';
-  client?: string;
-  dueDate: string;
-  dueTime?: string;
-  estimatedHours: number;
-  actualHours: number;
-  tags: string[];
-  createdAt: string;
-  taskType: 'date-based' | 'time-based';
-  startedAt?: string;
-  completedAt?: string;
-  isOverdue?: boolean;
-  overdueMinutes?: number;
-  escalationReason?: string;
-  comments?: Array<{ author: string; text: string; time: string; }>;
-}
+import { tasksApi, profilesApi } from '@/lib/supabase-api';
+import type { Task, Profile } from '@/lib/supabase-types';
 
 interface TaskManagementProps {
   user: any;
@@ -77,150 +52,145 @@ const TaskManagement = ({ user }: TaskManagementProps) => {
     reassignTo: ''
   });
 
-  const [tasks, setTasks] = useState<Task[]>([
-    {
-      id: 1,
-      title: 'Implement user authentication system',
-      description: 'Build secure login/logout functionality with role-based access control',
-      assignee: user.role === 'admin' ? 'John Developer' : user.name,
-      assignedBy: 'Admin User',
-      priority: 'high',
-      status: 'in-progress',
-      type: 'billable',
-      category: 'project',
-      client: 'Acme Corp',
-      dueDate: '2024-12-08',
-      dueTime: '15:00',
-      estimatedHours: 16,
-      actualHours: 12,
-      tags: ['frontend', 'security', 'react'],
-      createdAt: '2024-12-05',
-      taskType: 'time-based',
-      startedAt: '2024-12-07T09:00:00Z',
-      comments: [
-        { author: 'John Developer', text: 'Started implementing the login component', time: '2 hours ago' },
-        { author: 'Admin User', text: 'Please ensure proper validation', time: '1 day ago' }
-      ]
-    },
-    {
-      id: 2,
-      title: 'Client product demonstration',
-      description: 'Present the new features to potential client',
-      assignee: user.role === 'admin' ? 'Sarah Trainer' : user.name,
-      assignedBy: 'Admin User',
-      priority: 'medium',
-      status: 'pending',
-      type: 'billable',
-      category: 'demo',
-      client: 'Tech Solutions',
-      dueDate: '2024-12-09',
-      dueTime: '14:00',
-      estimatedHours: 4,
-      actualHours: 0,
-      tags: ['demo', 'client', 'presentation'],
-      createdAt: '2024-12-06',
-      taskType: 'time-based'
-    },
-    {
-      id: 3,
-      title: 'Team training session',
-      description: 'Conduct training session on new development practices',
-      assignee: user.role === 'admin' ? 'Mike Automation' : user.name,
-      assignedBy: 'Admin User',
-      priority: 'high',
-      status: 'escalated',
-      type: 'non-billable',
-      category: 'corporateConsultingTraining',
-      dueDate: '2024-12-08',
-      estimatedHours: 8,
-      actualHours: 0,
-      tags: ['training', 'team', 'development'],
-      createdAt: '2024-12-04',
-      taskType: 'date-based',
-      escalationReason: 'Resource conflict - need to reassign',
-      isOverdue: true,
-      overdueMinutes: 120
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [teamMembers, setTeamMembers] = useState<Profile[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadTasks();
+    loadTeamMembers();
+  }, []);
+
+  const loadTasks = async () => {
+    try {
+      setLoading(true);
+      const data = await tasksApi.getAll(user.id);
+      setTasks(data);
+    } catch (error) {
+      console.error('Error loading tasks:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to load tasks',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
     }
-  ]);
-
-  const teamMembers = [
-    'John Developer',
-    'Sarah Trainer', 
-    'Mike Automation',
-    'Lisa Designer',
-    'Tom Support'
-  ];
-
-  const createTask = (taskData: Omit<Task, 'id' | 'createdAt' | 'actualHours'>) => {
-    const newTask: Task = {
-      ...taskData,
-      id: Date.now(),
-      createdAt: new Date().toISOString().split('T')[0],
-      actualHours: 0
-    };
-    setTasks(prev => [...prev, newTask]);
-    console.log('New task created:', newTask);
-    
-    toast({
-      title: 'Task Created',
-      description: `Task "${newTask.title}" has been assigned to ${newTask.assignee}`,
-    });
   };
 
-  const updateTask = (taskId: number, updates: Partial<Task>) => {
-    setTasks(prevTasks => 
-      prevTasks.map(task => 
-        task.id === taskId ? { ...task, ...updates } : task
-      )
-    );
-    console.log('Task updated:', taskId, updates);
+  const loadTeamMembers = async () => {
+    try {
+      const profiles = await profilesApi.getAll();
+      setTeamMembers(profiles);
+    } catch (error) {
+      console.error('Error loading team members:', error);
+    }
   };
 
-  const startTask = (taskId: number) => {
+  const createTask = async (taskData: Omit<Task, 'id' | 'created_at' | 'updated_at'>) => {
+    try {
+      const newTask = await tasksApi.create({
+        ...taskData,
+        assigned_by_id: user.id,
+        actual_hours: 0,
+        is_overdue: false,
+        overdue_minutes: 0,
+        comments: []
+      });
+      
+      setTasks(prev => [newTask, ...prev]);
+      
+      toast({
+        title: 'Task Created',
+        description: `Task "${newTask.title}" has been assigned to ${newTask.assignee_id}`,
+      });
+    } catch (error) {
+      console.error('Error creating task:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to create task',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const updateTask = async (taskId: number, updates: Partial<Task>) => {
+    try {
+      const updatedTask = await tasksApi.update(taskId, updates);
+      setTasks(prevTasks => 
+        prevTasks.map(task => 
+          task.id === taskId ? updatedTask : task
+        )
+      );
+    } catch (error) {
+      console.error('Error updating task:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to update task',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const startTask = async (taskId: number) => {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
 
     const startTime = new Date().toISOString();
-    updateTask(taskId, { 
+    await updateTask(taskId, { 
       status: 'in-progress',
-      startedAt: startTime
+      started_at: startTime
     });
-    
-    addTaskToReport(taskId, task.title, task.category, user, task);
     
     toast({
       title: 'Task Started',
-      description: `Task "${task.title}" started and is now being tracked in your daily report`,
+      description: `Task "${task.title}" started and is now being tracked`,
     });
   };
 
-  const completeTask = (taskId: number) => {
+  const completeTask = async (taskId: number) => {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
 
-    const completionData = completeTaskInReport(taskId, user, task.dueTime);
+    const completionTime = new Date();
+    const startTime = task.started_at ? new Date(task.started_at) : completionTime;
+    const actualHours = (completionTime.getTime() - startTime.getTime()) / (1000 * 60 * 60);
     
-    updateTask(taskId, { 
+    // Check if task is overdue (for time-based tasks)
+    let isOverdue = false;
+    let overdueMinutes = 0;
+    
+    if (task.due_time) {
+      const today = new Date().toISOString().split('T')[0];
+      const dueDateTime = new Date(`${today}T${task.due_time}`);
+      
+      if (completionTime > dueDateTime) {
+        isOverdue = true;
+        overdueMinutes = Math.floor((completionTime.getTime() - dueDateTime.getTime()) / (1000 * 60));
+      }
+    }
+    
+    await updateTask(taskId, { 
       status: 'completed',
-      completedAt: new Date().toISOString(),
-      actualHours: completionData?.actualHours || 0,
-      isOverdue: completionData?.isOverdue || false,
-      overdueMinutes: completionData?.overdueMinutes
+      completed_at: completionTime.toISOString(),
+      actual_hours: Math.round(actualHours * 4) / 4,
+      is_overdue: isOverdue,
+      overdue_minutes: overdueMinutes
     });
     
     let message = `Task "${task.title}" has been completed`;
-    if (completionData?.isOverdue) {
-      message += ` (${completionData.overdueMinutes} minutes late)`;
+    if (isOverdue) {
+      message += ` (${overdueMinutes} minutes late)`;
     }
     
     toast({
       title: 'Task Completed',
       description: message,
-      variant: completionData?.isOverdue ? 'destructive' : 'default'
+      variant: isOverdue ? 'destructive' : 'default'
     });
   };
 
-  const escalateTask = () => {
+  const escalateTask = async () => {
     if (!escalationDialog.task || !escalationData.reason) {
       toast({
         title: 'Missing Information',
@@ -232,18 +202,18 @@ const TaskManagement = ({ user }: TaskManagementProps) => {
 
     const updates: Partial<Task> = {
       status: 'escalated',
-      escalationReason: escalationData.reason
+      escalation_reason: escalationData.reason
     };
 
     if (escalationData.reassignTo) {
-      updates.assignee = escalationData.reassignTo;
+      updates.assignee_id = escalationData.reassignTo;
     }
 
-    updateTask(escalationDialog.task.id, updates);
+    await updateTask(escalationDialog.task.id, updates);
     
     toast({
       title: 'Task Escalated',
-      description: `Task "${escalationDialog.task.title}" has been escalated${escalationData.reassignTo ? ` and reassigned to ${escalationData.reassignTo}` : ''}`,
+      description: `Task "${escalationDialog.task.title}" has been escalated${escalationData.reassignTo ? ` and reassigned` : ''}`,
     });
 
     setEscalationDialog({ open: false, task: null });
@@ -279,32 +249,22 @@ const TaskManagement = ({ user }: TaskManagementProps) => {
   };
 
   const getCategoryColor = (category: string) => {
-    switch (category) {
-      case 'demo':
-        return 'bg-indigo-100 text-indigo-700';
-      case 'prePostPresentation':
-        return 'bg-purple-100 text-purple-700';
-      case 'corporateConsultingTraining':
-        return 'bg-emerald-100 text-emerald-700';
-      case 'project':
-        return 'bg-blue-100 text-blue-700';
-      case 'consultingContentPrep':
-        return 'bg-orange-100 text-orange-700';
-      case 'techSupport':
-        return 'bg-red-100 text-red-700';
-      case 'meeting':
-        return 'bg-slate-100 text-slate-700';
-      case 'devLearning':
-        return 'bg-cyan-100 text-cyan-700';
-      case 'misc':
-        return 'bg-gray-100 text-gray-700';
-      default:
-        return 'bg-gray-100 text-gray-700';
-    }
+    const colors: { [key: string]: string } = {
+      'demo': 'bg-indigo-100 text-indigo-700',
+      'prePostPresentation': 'bg-purple-100 text-purple-700',
+      'corporateConsultingTraining': 'bg-emerald-100 text-emerald-700',
+      'project': 'bg-blue-100 text-blue-700',
+      'consultingContentPrep': 'bg-orange-100 text-orange-700',
+      'techSupport': 'bg-red-100 text-red-700',
+      'meeting': 'bg-slate-100 text-slate-700',
+      'devLearning': 'bg-cyan-100 text-cyan-700',
+      'misc': 'bg-gray-100 text-gray-700'
+    };
+    return colors[category] || 'bg-gray-100 text-gray-700';
   };
 
   const getCategoryLabel = (category: string) => {
-    const labels = {
+    const labels: { [key: string]: string } = {
       demo: 'Demo',
       prePostPresentation: 'Pre/Post Presentation',
       corporateConsultingTraining: 'Corporate Training',
@@ -315,19 +275,27 @@ const TaskManagement = ({ user }: TaskManagementProps) => {
       devLearning: 'Dev/Learning',
       misc: 'Miscellaneous'
     };
-    return labels[category as keyof typeof labels] || category;
+    return labels[category] || category;
   };
 
   const filteredTasks = filter === 'all' ? tasks : tasks.filter(task => task.status === filter);
 
   const getTasksForDate = (date: Date) => {
     const dateString = date.toISOString().split('T')[0];
-    return tasks.filter(task => task.dueDate === dateString);
+    return tasks.filter(task => task.due_date === dateString);
   };
 
   const getDatesWithTasks = () => {
-    return tasks.map(task => new Date(task.dueDate));
+    return tasks.map(task => new Date(task.due_date));
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -360,7 +328,7 @@ const TaskManagement = ({ user }: TaskManagementProps) => {
             Gantt View
           </Button>
           {user.role === 'admin' && (
-            <TaskAssignmentDialog onTaskCreate={createTask}>
+            <TaskAssignmentDialog onTaskCreate={createTask} teamMembers={teamMembers}>
               <Button>
                 <Plus className="h-4 w-4 mr-2" />
                 Assign Task
@@ -485,234 +453,6 @@ const TaskManagement = ({ user }: TaskManagementProps) => {
                           <h4 className="font-medium text-sm">{task.title}</h4>
                         </div>
                         <p className="text-xs text-gray-600 mb-2">{task.description}</p>
-                        <div className="flex items-center justify-between mb-2">
-                          <Badge variant={getPriorityColor(task.priority)} className="text-xs">
-                            {task.priority}
-                          </Badge>
-                          <span className="text-xs text-gray-500">{task.assignee}</span>
-                        </div>
-                        {task.dueTime && (
-                          <div className="flex items-center gap-1 mb-2">
-                            <Timer className="h-3 w-3 text-gray-500" />
-                            <span className="text-xs text-gray-500">Due: {task.dueTime}</span>
-                          </div>
-                        )}
-                        <Badge className={`text-xs ${getCategoryColor(task.category)}`}>
-                          {getCategoryLabel(task.category)}
-                        </Badge>
-                        {task.isOverdue && (
-                          <Badge variant="destructive" className="text-xs ml-2">
-                            Overdue: {task.overdueMinutes}min
-                          </Badge>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      ) : viewMode === 'list' ? (
-        <Tabs value={filter} onValueChange={setFilter} className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
-            <TabsTrigger value="all">All Tasks</TabsTrigger>
-            <TabsTrigger value="pending">Pending</TabsTrigger>
-            <TabsTrigger value="in-progress">In Progress</TabsTrigger>
-            <TabsTrigger value="completed">Completed</TabsTrigger>
-            <TabsTrigger value="escalated">Escalated</TabsTrigger>
-          </TabsList>
+                        <div className="flex items-center justify-between mb-2">Let me start by creating the database schema for all the entities we need:
 
-          <TabsContent value={filter} className="mt-6">
-            <div className="space-y-4">
-              {filteredTasks.map((task) => (
-                <Card key={task.id} className="hover:shadow-md transition-shadow">
-                  <CardHeader className="pb-3">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-2">
-                          {getStatusIcon(task.status)}
-                          <CardTitle className="text-lg">{task.title}</CardTitle>
-                          {task.taskType === 'time-based' && (
-                            <Badge variant="outline" className="text-xs">
-                              <Timer className="h-3 w-3 mr-1" />
-                              Time-based
-                            </Badge>
-                          )}
-                        </div>
-                        <CardDescription className="text-sm">{task.description}</CardDescription>
-                      </div>
-                      <div className="flex flex-col gap-2">
-                        <Badge variant={getPriorityColor(task.priority)}>
-                          {task.priority}
-                        </Badge>
-                        <Badge variant={task.type === 'billable' ? 'default' : 'secondary'}>
-                          {task.type}
-                        </Badge>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-                      <div className="flex items-center gap-2">
-                        <User className="h-4 w-4 text-gray-500" />
-                        <span className="text-sm">{task.assignee}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <CalendarIcon className="h-4 w-4 text-gray-500" />
-                        <span className="text-sm">Due: {task.dueDate}</span>
-                        {task.dueTime && <span className="text-sm text-blue-600">at {task.dueTime}</span>}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Clock className="h-4 w-4 text-gray-500" />
-                        <span className="text-sm">{task.actualHours}/{task.estimatedHours}h</span>
-                      </div>
-                      {task.client && (
-                        <div>
-                          <span className="text-sm font-medium">Client: {task.client}</span>
-                        </div>
-                      )}
-                    </div>
-                    
-                    <div className="flex items-center gap-2 mb-4">
-                      <Badge className={`text-xs ${getCategoryColor(task.category)}`}>
-                        {getCategoryLabel(task.category)}
-                      </Badge>
-                      {task.tags.map((tag) => (
-                        <Badge key={tag} variant="outline" className="text-xs">
-                          {tag}
-                        </Badge>
-                      ))}
-                      {task.isOverdue && (
-                        <Badge variant="destructive" className="text-xs">
-                          Overdue: {task.overdueMinutes}min
-                        </Badge>
-                      )}
-                    </div>
-
-                    {task.escalationReason && (
-                      <div className="bg-red-50 border border-red-200 rounded p-3 mb-4">
-                        <p className="text-sm font-medium text-red-800">Escalation Reason:</p>
-                        <p className="text-sm text-red-700">{task.escalationReason}</p>
-                      </div>
-                    )}
-
-                    {task.comments && task.comments.length > 0 && (
-                      <div className="border-t pt-3 mb-4">
-                        <p className="text-sm font-medium mb-2">Recent Comments:</p>
-                        {task.comments.slice(0, 2).map((comment, index) => (
-                          <div key={index} className="text-xs text-gray-600 mb-1">
-                            <span className="font-medium">{comment.author}:</span> {comment.text}
-                            <span className="text-gray-400 ml-2">{comment.time}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="flex justify-end gap-2">
-                      <TaskDetailsDialog task={task} onTaskUpdate={updateTask} currentUser={user}>
-                        <Button variant="outline" size="sm">
-                          <Eye className="h-4 w-4 mr-1" />
-                          View Details
-                        </Button>
-                      </TaskDetailsDialog>
-                      
-                      {user.role === 'admin' && (
-                        <>
-                          <TaskEditDialog task={task} onTaskUpdate={updateTask}>
-                            <Button variant="outline" size="sm">
-                              <Edit className="h-4 w-4 mr-1" />
-                              Edit Task
-                            </Button>
-                          </TaskEditDialog>
-                          
-                          {(task.status === 'in-progress' || task.status === 'pending') && (
-                            <Button 
-                              variant="outline" 
-                              size="sm"
-                              onClick={() => setEscalationDialog({ open: true, task })}
-                            >
-                              <AlertCircle className="h-4 w-4 mr-1" />
-                              Escalate
-                            </Button>
-                          )}
-                        </>
-                      )}
-                      
-                      {task.status === 'pending' && (
-                        <Button 
-                          size="sm"
-                          onClick={() => startTask(task.id)}
-                        >
-                          <Play className="h-4 w-4 mr-1" />
-                          Start Task
-                        </Button>
-                      )}
-                      {task.status === 'in-progress' && (
-                        <Button 
-                          size="sm"
-                          onClick={() => completeTask(task.id)}
-                        >
-                          <CheckCircle className="h-4 w-4 mr-1" />
-                          Complete
-                        </Button>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </TabsContent>
-        </Tabs>
-      ) : null}
-
-      {/* Escalation Dialog */}
-      <Dialog open={escalationDialog.open} onOpenChange={(open) => setEscalationDialog({ open, task: escalationDialog.task })}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Escalate Task</DialogTitle>
-            <DialogDescription>
-              Escalate "{escalationDialog.task?.title}" and optionally reassign to another team member
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="escalationReason">Escalation Reason *</Label>
-              <Textarea
-                id="escalationReason"
-                value={escalationData.reason}
-                onChange={(e) => setEscalationData(prev => ({ ...prev, reason: e.target.value }))}
-                placeholder="Explain why this task is being escalated..."
-                rows={3}
-              />
-            </div>
-            <div>
-              <Label htmlFor="reassignTo">Reassign To (Optional)</Label>
-              <Select value={escalationData.reassignTo} onValueChange={(value) => setEscalationData(prev => ({ ...prev, reassignTo: value }))}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select team member to reassign" />
-                </SelectTrigger>
-                <SelectContent>
-                  {teamMembers.filter(member => member !== escalationDialog.task?.assignee).map(member => (
-                    <SelectItem key={member} value={member}>{member}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="flex justify-end gap-3">
-            <Button variant="outline" onClick={() => setEscalationDialog({ open: false, task: null })}>
-              Cancel
-            </Button>
-            <Button onClick={escalateTask} variant="destructive">
-              <AlertCircle className="h-4 w-4 mr-2" />
-              Escalate Task
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-};
-
-export default TaskManagement;
+<boltArtifact id="supabase-migration-schema" title="Create Supabase Database Schema">

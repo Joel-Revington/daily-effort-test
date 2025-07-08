@@ -7,16 +7,15 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { Save, Clock, Calendar, Plus, Trash2, Send, AlertCircle, Trophy, TrendingUp } from 'lucide-react';
-import { reportStore } from '@/utils/reportStore';
-import { addDemoToSalesTracking } from '@/utils/salesIntegration';
-import { getTaskEntriesForDate, getDCRInsights } from '@/utils/taskDailyReportIntegration';
+import { dailyReportService, DailyReport as DailyReportType, ReportActivity } from '@/services/dailyReportService';
+import { useSupabase } from '@/hooks/useSupabase';
 
 interface DailyReportProps {
   user: any;
 }
 
 interface ActivityEntry {
-  id: string;
+  id?: string;
   category: string;
   fromTime: string;
   toTime: string;
@@ -27,6 +26,8 @@ interface ActivityEntry {
 
 const DailyReport = ({ user }: DailyReportProps) => {
   const { toast } = useToast();
+  const { handleError, handleSuccess } = useSupabase();
+  
   const [reportData, setReportData] = useState({
     date: new Date().toISOString().split('T')[0],
     attendanceStatus: '',
@@ -43,7 +44,8 @@ const DailyReport = ({ user }: DailyReportProps) => {
   const [savedEntries, setSavedEntries] = useState<ActivityEntry[]>([]);
   const [isDraft, setIsDraft] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
-  const [dcrInsights, setDcrInsights] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [reportId, setReportId] = useState<string | null>(null);
 
   const attendanceOptions = ['Present', 'Half Day', 'Leave', 'Work From Home', 'Client Site'];
 
@@ -64,7 +66,6 @@ const DailyReport = ({ user }: DailyReportProps) => {
         { value: 'misc', label: 'Miscellaneous', billable: false }
       ];
     } else {
-      // Application Engineer activities
       return [
         { value: 'demo', label: 'Demo', billable: true },
         { value: 'prePostPresentation', label: 'Pre/Post Presentation', billable: true },
@@ -91,52 +92,47 @@ const DailyReport = ({ user }: DailyReportProps) => {
 
   useEffect(() => {
     loadSavedEntries();
-    loadDCRInsights();
   }, [reportData.date]);
 
-  const loadDCRInsights = () => {
-    const insights = getDCRInsights(user, reportData.date);
-    setDcrInsights(insights);
-  };
-
-  const loadSavedEntries = () => {
-    console.log('Loading saved entries for date:', reportData.date, 'user:', user.id);
-    const existingReports = reportStore.getReports(user.id, user.role);
-    console.log('All reports for user:', existingReports);
-    
-    const todayReport = existingReports.find(report => 
-      report.date === reportData.date && report.userId === user.id
-    );
-    
-    console.log('Today report found:', todayReport);
-    
-    if (todayReport) {
-      const entries: ActivityEntry[] = todayReport.activities.map((activity, index) => ({
-        id: `${index}`,
-        category: activity.category,
-        fromTime: activity.fromTime,
-        toTime: activity.toTime,
-        hours: activity.hours,
-        notes: activity.notes,
-        isBillable: activity.isBillable || false
-      }));
-      setSavedEntries(entries);
-      setReportData(prev => ({
-        ...prev,
-        attendanceStatus: todayReport.attendanceStatus,
-        generalNotes: todayReport.generalNotes
-      }));
-      setIsSubmitted(!!todayReport.submittedAt);
-      setIsDraft(!todayReport.submittedAt && entries.length > 0);
-    } else {
-      setSavedEntries([]);
-      setIsSubmitted(false);
-      setIsDraft(false);
-      setReportData(prev => ({
-        ...prev,
-        attendanceStatus: '',
-        generalNotes: ''
-      }));
+  const loadSavedEntries = async () => {
+    try {
+      setLoading(true);
+      const report = await dailyReportService.getReportByUserAndDate(user.id, reportData.date);
+      
+      if (report) {
+        setReportId(report.id);
+        const entries: ActivityEntry[] = (report.activities || []).map((activity) => ({
+          id: activity.id,
+          category: activity.category,
+          fromTime: activity.from_time,
+          toTime: activity.to_time,
+          hours: activity.hours,
+          notes: activity.notes,
+          isBillable: activity.is_billable
+        }));
+        setSavedEntries(entries);
+        setReportData(prev => ({
+          ...prev,
+          attendanceStatus: report.attendance_status,
+          generalNotes: report.general_notes
+        }));
+        setIsSubmitted(!!report.submitted_at);
+        setIsDraft(!report.submitted_at && entries.length > 0);
+      } else {
+        setReportId(null);
+        setSavedEntries([]);
+        setIsSubmitted(false);
+        setIsDraft(false);
+        setReportData(prev => ({
+          ...prev,
+          attendanceStatus: '',
+          generalNotes: ''
+        }));
+      }
+    } catch (error) {
+      handleError(error, 'load report');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -151,7 +147,7 @@ const DailyReport = ({ user }: DailyReportProps) => {
     const diffMs = to.getTime() - from.getTime();
     const diffHours = diffMs / (1000 * 60 * 60);
     
-    return Math.round(diffHours * 4) / 4; // Round to nearest 0.25
+    return Math.round(diffHours * 4) / 4;
   };
 
   const getCurrentEntryHours = () => {
@@ -174,7 +170,7 @@ const DailyReport = ({ user }: DailyReportProps) => {
     setCurrentEntry(prev => ({ ...prev, [field]: value }));
   };
 
-  const addEntry = () => {
+  const addEntry = async () => {
     const hours = getCurrentEntryHours();
     
     if (!currentEntry.category || !currentEntry.fromTime || !currentEntry.toTime || hours <= 0) {
@@ -189,7 +185,6 @@ const DailyReport = ({ user }: DailyReportProps) => {
     const selectedActivity = activityOptions.find(opt => opt.value === currentEntry.category);
     
     const newEntry: ActivityEntry = {
-      id: Date.now().toString(),
       category: selectedActivity?.label || currentEntry.category,
       fromTime: currentEntry.fromTime,
       toTime: currentEntry.toTime,
@@ -198,46 +193,68 @@ const DailyReport = ({ user }: DailyReportProps) => {
       isBillable: selectedActivity?.billable || false
     };
 
-    if (currentEntry.category === 'demo') {
-      try {
-        addDemoToSalesTracking(newEntry, user);
-        toast({
-          title: 'Demo Added to Sales Tracking',
-          description: 'Your demo has been automatically added to the sales tracking system.',
+    try {
+      // Create or update report first
+      let currentReportId = reportId;
+      if (!currentReportId) {
+        const report = await dailyReportService.upsertReport({
+          user_id: user.id,
+          date: reportData.date,
+          attendance_status: reportData.attendanceStatus || 'Present',
+          general_notes: reportData.generalNotes,
+          submitted_at: null
         });
-      } catch (error) {
-        console.error('Error adding demo to sales tracking:', error);
+        currentReportId = report.id;
+        setReportId(currentReportId);
       }
-    }
 
-    setSavedEntries(prev => [...prev, newEntry]);
-    
-    setCurrentEntry({
-      category: '',
-      fromTime: '',
-      toTime: '',
-      notes: ''
-    });
-
-    toast({
-      title: 'Entry Added',
-      description: `Added ${hours.toFixed(2)} hours for ${newEntry.category}. Total: ${(getTotalHours() + hours).toFixed(2)}h`,
-    });
-  };
-
-  const removeEntry = (id: string) => {
-    const entryToRemove = savedEntries.find(entry => entry.id === id);
-    setSavedEntries(prev => prev.filter(entry => entry.id !== id));
-    
-    if (entryToRemove) {
-      toast({
-        title: 'Entry Removed',
-        description: `Removed ${entryToRemove.hours.toFixed(2)} hours from ${entryToRemove.category}`,
+      // Add activity
+      const activity = await dailyReportService.addActivity({
+        report_id: currentReportId,
+        category: newEntry.category,
+        from_time: newEntry.fromTime,
+        to_time: newEntry.toTime,
+        hours: newEntry.hours,
+        notes: newEntry.notes,
+        is_billable: newEntry.isBillable
       });
+
+      setSavedEntries(prev => [...prev, { ...newEntry, id: activity.id }]);
+      
+      setCurrentEntry({
+        category: '',
+        fromTime: '',
+        toTime: '',
+        notes: ''
+      });
+
+      toast({
+        title: 'Entry Added',
+        description: `Added ${hours.toFixed(2)} hours for ${newEntry.category}. Total: ${(getTotalHours() + hours).toFixed(2)}h`,
+      });
+    } catch (error) {
+      handleError(error, 'add entry');
     }
   };
 
-  const saveAsDraft = () => {
+  const removeEntry = async (id: string) => {
+    try {
+      await dailyReportService.deleteActivity(id);
+      const entryToRemove = savedEntries.find(entry => entry.id === id);
+      setSavedEntries(prev => prev.filter(entry => entry.id !== id));
+      
+      if (entryToRemove) {
+        toast({
+          title: 'Entry Removed',
+          description: `Removed ${entryToRemove.hours.toFixed(2)} hours from ${entryToRemove.category}`,
+        });
+      }
+    } catch (error) {
+      handleError(error, 'remove entry');
+    }
+  };
+
+  const saveAsDraft = async () => {
     if (savedEntries.length === 0) {
       toast({
         title: 'No Entries',
@@ -247,36 +264,23 @@ const DailyReport = ({ user }: DailyReportProps) => {
       return;
     }
 
-    const reportToStore = {
-      id: `${user.id}-${reportData.date}`,
-      userId: user.id,
-      userName: user.name,
-      userRole: user.role,
-      date: reportData.date,
-      attendanceStatus: reportData.attendanceStatus,
-      activities: savedEntries.map(entry => ({
-        category: entry.category,
-        fromTime: entry.fromTime,
-        toTime: entry.toTime,
-        hours: entry.hours,
-        notes: entry.notes,
-        isBillable: entry.isBillable
-      })),
-      generalNotes: reportData.generalNotes,
-      submittedAt: '' // Empty means saved but not submitted
-    };
+    try {
+      await dailyReportService.upsertReport({
+        user_id: user.id,
+        date: reportData.date,
+        attendance_status: reportData.attendanceStatus,
+        general_notes: reportData.generalNotes,
+        submitted_at: null
+      });
 
-    reportStore.addReport(reportToStore);
-    setIsDraft(true);
-    console.log('Report saved as draft:', reportToStore);
-
-    toast({
-      title: 'Draft Saved',
-      description: `Your daily report has been saved as draft with ${getTotalHours().toFixed(2)} total hours.`,
-    });
+      setIsDraft(true);
+      handleSuccess(`Your daily report has been saved as draft with ${getTotalHours().toFixed(2)} total hours.`);
+    } catch (error) {
+      handleError(error, 'save draft');
+    }
   };
 
-  const submitFinalReport = () => {
+  const submitFinalReport = async () => {
     if (savedEntries.length === 0) {
       toast({
         title: 'No Entries',
@@ -295,34 +299,21 @@ const DailyReport = ({ user }: DailyReportProps) => {
       return;
     }
 
-    const reportToStore = {
-      id: `${user.id}-${reportData.date}`,
-      userId: user.id,
-      userName: user.name,
-      userRole: user.role,
-      date: reportData.date,
-      attendanceStatus: reportData.attendanceStatus,
-      activities: savedEntries.map(entry => ({
-        category: entry.category,
-        fromTime: entry.fromTime,
-        toTime: entry.toTime,
-        hours: entry.hours,
-        notes: entry.notes,
-        isBillable: entry.isBillable
-      })),
-      generalNotes: reportData.generalNotes,
-      submittedAt: new Date().toISOString()
-    };
+    try {
+      await dailyReportService.upsertReport({
+        user_id: user.id,
+        date: reportData.date,
+        attendance_status: reportData.attendanceStatus,
+        general_notes: reportData.generalNotes,
+        submitted_at: new Date().toISOString()
+      });
 
-    reportStore.addReport(reportToStore);
-    setIsSubmitted(true);
-    setIsDraft(false);
-    console.log('Report submitted:', reportToStore);
-
-    toast({
-      title: 'Report Submitted',
-      description: `Your daily report has been submitted successfully with ${getTotalHours().toFixed(2)} total hours.`,
-    });
+      setIsSubmitted(true);
+      setIsDraft(false);
+      handleSuccess(`Your daily report has been submitted successfully with ${getTotalHours().toFixed(2)} total hours.`);
+    } catch (error) {
+      handleError(error, 'submit report');
+    }
   };
 
   const totalWorkedHours = getTotalHours();
@@ -331,35 +322,13 @@ const DailyReport = ({ user }: DailyReportProps) => {
   const currentHours = getCurrentEntryHours();
   const canEditDate = isDateEditable(reportData.date);
 
-  const getWorkTimings = () => {
-    const today = new Date();
-    const dayOfWeek = today.getDay();
-    
-    if (dayOfWeek === 0) return 'Leave (Sunday)';
-    if (dayOfWeek === 6) {
-      const date = today.getDate();
-      const firstSaturday = 7 - new Date(today.getFullYear(), today.getMonth(), 1).getDay();
-      const saturdays = [firstSaturday];
-      for (let i = 1; i < 5; i++) {
-        saturdays.push(firstSaturday + (i * 7));
-      }
-      const saturdayNumber = saturdays.findIndex(sat => date <= sat) + 1;
-      
-      if (saturdayNumber === 2 || saturdayNumber === 4) {
-        return 'Leave (2nd/4th Saturday)';
-      }
-      return '9:30 AM - 6:00 PM';
-    }
-    return '9:30 AM - 6:20 PM';
-  };
-
-  const workTimings = getWorkTimings();
-
-  const getDCRScoreColor = (score: number) => {
-    if (score >= 4.5) return 'text-green-600';
-    if (score >= 3.5) return 'text-yellow-600';
-    return 'text-red-600';
-  };
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -420,87 +389,34 @@ const DailyReport = ({ user }: DailyReportProps) => {
           </CardContent>
         </Card>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card className="bg-blue-50 border-blue-200">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Clock className="h-5 w-5 text-blue-600" />
-                Today's Summary
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-                <div>
-                  <p className="text-2xl font-bold text-blue-600">{totalWorkedHours.toFixed(1)}h</p>
-                  <p className="text-sm text-gray-600">Total Hours</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-green-600">{productivityHours.toFixed(1)}h</p>
-                  <p className="text-sm text-gray-600">Productive Hours</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-purple-600">{productivityPercentage}%</p>
-                  <p className="text-sm text-gray-600">Productivity</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-orange-600">{currentHours.toFixed(1)}h</p>
-                  <p className="text-sm text-gray-600">Current Entry</p>
-                </div>
+        <Card className="bg-blue-50 border-blue-200">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Clock className="h-5 w-5 text-blue-600" />
+              Today's Summary
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+              <div>
+                <p className="text-2xl font-bold text-blue-600">{totalWorkedHours.toFixed(1)}h</p>
+                <p className="text-sm text-gray-600">Total Hours</p>
               </div>
-              <div className="mt-4 text-center border-t pt-4">
-                <p className="text-lg font-bold text-gray-600">{workTimings}</p>
-                <p className="text-sm text-gray-600">Work Timings</p>
+              <div>
+                <p className="text-2xl font-bold text-green-600">{productivityHours.toFixed(1)}h</p>
+                <p className="text-sm text-gray-600">Productive Hours</p>
               </div>
-            </CardContent>
-          </Card>
-
-          {dcrInsights && (
-            <Card className="bg-gradient-to-br from-indigo-50 to-purple-50 border-indigo-200">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Trophy className="h-5 w-5 text-indigo-600" />
-                  Daily Call Report (DCR) Score
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-center mb-4">
-                  <p className={`text-4xl font-bold ${getDCRScoreColor(dcrInsights.score)}`}>
-                    {dcrInsights.score}/5
-                  </p>
-                  <p className="text-sm text-gray-600 mt-1">{dcrInsights.message}</p>
-                </div>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span>Total Tasks:</span>
-                    <span className="font-medium">{dcrInsights.totalTasks}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span>Completed:</span>
-                    <span className="font-medium text-green-600">{dcrInsights.completed}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span>Overdue:</span>
-                    <span className="font-medium text-red-600">{dcrInsights.overdue}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span>Delay:</span>
-                    <span className="font-medium text-orange-600">{Math.floor(dcrInsights.totalOverdueMinutes / 60)}h {dcrInsights.totalOverdueMinutes % 60}m</span>
-                  </div>
-                </div>
-                <div className="mt-4 p-3 bg-white/60 rounded-lg">
-                  <div className="flex items-center gap-2 mb-2">
-                    <TrendingUp className="h-4 w-4 text-indigo-600" />
-                    <span className="text-sm font-medium">Pro Tip:</span>
-                  </div>
-                  <p className="text-xs text-gray-700">
-                    Complete tasks on time and maintain good DCR scores for better KPI ratings. 
-                    Aim for 4.5+ daily to achieve excellent performance reviews.
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </div>
+              <div>
+                <p className="text-2xl font-bold text-purple-600">{productivityPercentage}%</p>
+                <p className="text-sm text-gray-600">Productivity</p>
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-orange-600">{currentHours.toFixed(1)}h</p>
+                <p className="text-sm text-gray-600">Current Entry</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {!isSubmitted && canEditDate && (
           <Card>
@@ -606,11 +522,11 @@ const DailyReport = ({ user }: DailyReportProps) => {
                         <p className="text-sm text-gray-600 mt-1">{entry.notes}</p>
                       )}
                     </div>
-                    {!isSubmitted && canEditDate && (
+                    {!isSubmitted && canEditDate && entry.id && (
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => removeEntry(entry.id)}
+                        onClick={() => removeEntry(entry.id!)}
                         className="text-red-600 hover:text-red-700"
                       >
                         <Trash2 className="h-4 w-4" />
