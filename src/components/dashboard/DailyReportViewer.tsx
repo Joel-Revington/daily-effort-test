@@ -175,5 +175,8 @@ const DailyReportViewer = ({ user }: DailyReportViewerProps) => {
       case 'leave': return 'bg-red-100 text-red-800';
       case 'work from home': return 'bg-blue-100 text-blue-800';
       case 'client site': return 'bg-purple-Let me start by creating the database schema for all the entities we need:
+    }
+  }
+}
 
 <boltArtifact id="supabase-migration-schema" title="Create Supabase Database Schema">
